@@ -138,4 +138,7 @@ class CausalLearnOracle:
         return self.oracle(x, y, Z) > self.threshold
 
     def _run(self, x, y, Z=[]):
+        x = self.nodes_to_idx_mapping[x]
+        y = self.nodes_to_idx_mapping[y]
+        Z = set([self.nodes_to_idx_mapping[z] for z in Z])
         return self.oracle(x, y, Z)
