@@ -11,6 +11,20 @@ The primary focus of MagPy is causal discovery, which involves:
 3. Implementing constraint-based and score-based algorithms
 4. Providing tools for causal inference and intervention analysis
 
+## Installation
+
+```bash
+git clone https://github.com/ergodic-ai/magpy.git
+cd magpy
+pip install .
+```
+
+or
+
+```bash
+pip install git+https://github.com/ergodic-ai/magpy.git
+```
+
 ## Main Packages and Usage
 
 ### 1. AStarSearch
