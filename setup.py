@@ -1,13 +1,14 @@
 from setuptools import setup, find_packages
 
+with open("requirements.txt") as f:
+    required = f.read().splitlines()
+
 setup(
     name="magpy",
     version="0.1.0",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
-    install_requires=[
-        # List your dependencies here
-    ],
+    install_requires=required,
     author="ergodic.ai",
     author_email="andre@ergodic.ai",
     description="A package for causal discovery and causal inference algorithms",
