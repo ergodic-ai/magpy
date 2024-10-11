@@ -1,3 +1,5 @@
+import logging
+from datetime import datetime
 from itertools import combinations, chain
 import pandas
 import numpy
@@ -5,7 +7,7 @@ from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
 
-def execute_parallel(func, args):
+def execute_parallel(func, args, n_jobs=10):
     """
     Execute a function in parallel
     :param func: a function to execute
@@ -15,9 +17,9 @@ def execute_parallel(func, args):
 
     results = []
 
-    r = Parallel(n_jobs=512)(
+    r = Parallel(n_jobs=n_jobs)(
         delayed(func)(arg["node_i"], arg["node_j"], arg["cond_set"])
-        for arg in tqdm(args)
+        for arg in tqdm(args, desc="Processing", leave=True)
     )
 
     for i, arg in enumerate(args):
@@ -45,12 +47,13 @@ def unique_element_iterator(chained_iterators):
 def pc_skeleton(
     ci_test,
     nodes,
-    max_sepset_size=-1,
+    max_sepset_size=5,
     existing=[],
     forbidden=[],
     mat=None,
     intersection_or_union="union",
     skip_sepsets=[],
+    set_sizes=[],
     verbose=False,
 ):
     """
@@ -93,16 +96,34 @@ def pc_skeleton(
 
         return True
 
+    if set_sizes is None or len(set_sizes) == 0:
+        set_sizes = range(len(nodes))
+
     cond_set_size = 0
     while not exit_cond(cond_set_size):
-        if verbose:
-            print(f"Conditioning set of size: {cond_set_size}")
 
         if cond_set_size in skip_sepsets:
             cond_set_size += 1
             continue
 
-        for node_i, node_j in tqdm(combinations(nodes, 2)):
+        if cond_set_size not in set_sizes:
+            cond_set_size += 1
+            continue
+
+        c = list(combinations(nodes, 2))
+
+        if verbose:
+            n_edges = len([(x, y) for x, y in c if mat.loc[x, y] == 1])
+            logging.info(f"Cond set {cond_set_size}: Processing {n_edges} edges")
+
+        removed_edges = []
+
+        for node_i, node_j in tqdm(c):
+            # if verbose:
+            #     logging.info(
+            #         f"Testing edge {node_i} -- {node_j} (cond_set_size: {cond_set_size})"
+            #     )
+
             if mat.loc[node_i, node_j] == 0:
                 continue
 
@@ -130,11 +151,16 @@ def pc_skeleton(
                     mat.loc[node_j, node_i] = 0
                     sepsets[(node_i, node_j)] = cond_set
 
-                    if verbose:
-                        print(
-                            f"Removed edge {node_i} -- {node_j} based on the conditioning set: {cond_set} // { pot_parents_i } // { pot_parents_j }"
-                        )
+                    removed_edges.append((node_i, node_j, cond_set))
+
                     break
+
+        if verbose:
+            logging.info(f"Step {cond_set_size}: Removed {len(removed_edges)} edges")
+            for node_i, node_j, cond_set in removed_edges:
+                logging.info(
+                    f"Removed edge {node_i} -- {node_j} based on the conditioning set: {cond_set}"
+                )
 
         cond_set_size += 1
 
@@ -149,6 +175,8 @@ def parallel_pc_skeleton(
     forbidden=[],
     mat=None,
     intersection_or_union="union",
+    n_jobs=10,
+    set_sizes=[],
     verbose=False,
 ):
     """
@@ -158,6 +186,7 @@ def parallel_pc_skeleton(
     :param existing: a list of edges that are known to be in the graph
     :param forbidden: a list of edges that are known to not be in the graph
     :param verbose: if True, print the graph after each step
+    :param n_jobs: the number of jobs to run in parallel
     :return: a networkx graph representing the skeleton of the DAG
     """
 
@@ -191,11 +220,26 @@ def parallel_pc_skeleton(
 
         return True
 
+    if set_sizes is None or len(set_sizes) == 0:
+        set_sizes = range(len(nodes))
+
     cond_set_size = 0
     while not exit_cond(cond_set_size):
-        # print(cond_set_size)
+        if verbose:
+            logging.info(f"Processing conditioning set of size: {cond_set_size}")
         args = []
-        for node_i, node_j in combinations(nodes, 2):
+
+        if cond_set_size not in set_sizes:
+            cond_set_size += 1
+            continue
+
+        c = list(combinations(nodes, 2))
+
+        if verbose:
+            n_edges = len([(x, y) for x, y in c if mat.loc[x, y] == 1])
+            logging.info(f"Cond set {cond_set_size}: Processing {n_edges} edges")
+
+        for node_i, node_j in c:
             if mat.loc[node_i, node_j] == 0:
                 continue
 
@@ -224,13 +268,9 @@ def parallel_pc_skeleton(
                 arg["cond_set"] = cond_set
                 args.append(arg)
 
-        results = execute_parallel(ci_test, args)
+        results = execute_parallel(ci_test, args, n_jobs=n_jobs)
 
         for result in results:
-            if verbose:
-                print(
-                    f"Testing edge {node_i} -- {node_j} based on the conditioning set: {cond_set} // { pot_parents_i } // { pot_parents_j }"
-                )
 
             if result["independent"]:
                 node_i = result["node_i"]
@@ -244,6 +284,11 @@ def parallel_pc_skeleton(
                 sepsets[(node_i, node_j)] = list(
                     set(prev_cond_set).union(set(cond_set))
                 )
+
+                if verbose:
+                    logging.info(
+                        f"Removed edge {node_i} -- {node_j} based on the conditioning set: {cond_set} (cond_set_size: {cond_set_size})"
+                    )
 
         cond_set_size += 1
 

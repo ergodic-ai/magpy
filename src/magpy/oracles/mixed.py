@@ -1,10 +1,14 @@
 import pandas
 import numpy
 from typing import Optional
+from magpy.oracles.oracles import CausalLearnOracle
 from magpy.utils.DataManager import DataTypeManager, prep_data
 from scipy.stats import f, pearsonr
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
 from scipy.stats import chi2
+import logging
+from datetime import datetime
 
 
 def log_likelihood(model, X, y):
@@ -31,7 +35,7 @@ def log_likelihood(model, X, y):
     for i, label in enumerate(y):
         y_one_hot[i, numpy.where(classes == label)] = 1
     # Calculate the log-likelihood
-    log_likelihood = numpy.sum(y_one_hot * numpy.log(probabilities))
+    log_likelihood = numpy.sum(y_one_hot * numpy.log(probabilities + 1e-10))
 
     return log_likelihood
 
@@ -70,6 +74,7 @@ class MixedDataOracle:
         self.RSSCache = {}
         self.LLCache = {}
         self.threshold = threshold
+        self.chi2 = CausalLearnOracle(data, "chisq", threshold)
 
     def logistic_regression_lr_test(self, x: str, y: str, Z: Optional[list[str]] = []):
         """Perform a likelihood-ratio test to compare the full model with the reduced model."""
@@ -90,6 +95,9 @@ class MixedDataOracle:
         if len(numpy.unique(y)) > 2:
             model_type = "multinomial"
 
+        algo = LogisticRegression
+        algo = LinearDiscriminantAnalysis
+
         if model_type == "binary":
             kwargs = {
                 "max_iter": 100,
@@ -97,6 +105,7 @@ class MixedDataOracle:
                 "tol": 1e-4,
                 "solver": "liblinear",
             }
+            kwargs = {"solver": "svd"}
         elif model_type == "multinomial":
             kwargs = {
                 "solver": "lbfgs",
@@ -106,12 +115,27 @@ class MixedDataOracle:
                 "n_jobs": -1,
                 "warm_start": True,
             }
+            kwargs = {"solver": "svd"}
         else:
             raise ValueError(
                 "Unsupported model type. Choose 'binary' or 'multinomial'."
             )
 
         # Full model
+
+        def fit_and_get_ll_and_d(X, y):
+            try:
+                model = algo(**kwargs).fit(X, y)
+                return log_likelihood(model, X, y), len(model.coef_[0])
+            except Exception as e:
+                logging.debug(
+                    f"\nStiff classification found. Adding shrinkage: {x} -- {y_feat} | {Z}"
+                )
+
+                model = LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto").fit(
+                    X, y
+                )
+                return log_likelihood(model, X, y), len(model.coef_[0])
 
         thisHash = hashFeatureList(Z_features + x_features, y_feat)
         if thisHash in self.LLCache:
@@ -122,9 +146,7 @@ class MixedDataOracle:
             ones = numpy.ones(shape=(n, 1))
             X = numpy.hstack([ones, X])
 
-            model_full = LogisticRegression(**kwargs).fit(X, y)
-            LLF1 = log_likelihood(model_full, X, y)
-            d_full = len(model_full.coef_[0])
+            LLF1, d_full = fit_and_get_ll_and_d(X, y)
             self.LLCache[thisHash] = LLF1, d_full
 
         # Reduced model (without the last predictor)
@@ -136,9 +158,7 @@ class MixedDataOracle:
             ones = numpy.ones(shape=(n, 1))
             X_reduced = numpy.hstack([ones, X_reduced])
 
-            model_reduced = LogisticRegression(**kwargs).fit(X_reduced, y)
-            LLF0 = log_likelihood(model_reduced, X_reduced, y)
-            d_reduced = len(model_reduced.coef_[0])
+            LLF0, d_reduced = fit_and_get_ll_and_d(X_reduced, y)
             self.LLCache[thisHash] = LLF0, d_reduced
 
         # Degrees of freedom
@@ -214,7 +234,7 @@ class MixedDataOracle:
         # print(p1, p2)
         return min(2 * min(p1, p2), max(p1, p2))
 
-    def _run(self, x: str, y: str, Z: Optional[list[str]] = []):
+    def _run(self, x: str, y: str, Z: Optional[list[str]] = [], verbose: bool = False):
         assert y in self.data.columns, f"Target {y} not in data columns"
         assert x in self.data.columns, f"Source {x} not in data columns"
         for z in Z:
@@ -228,27 +248,47 @@ class MixedDataOracle:
             self.data_types[x] in regression_types
             and self.data_types[y] in regression_types
         ):
+            if verbose:
+                logging.debug("Running cont -> cont")  # Changed from info to debug
             return self._run_cont_cont(x, y, Z)
 
         if self.data_types[x] in regression_types:
-            # print("Running cont -> cat")
+            if verbose:
+                logging.debug(
+                    f"Running cont -> cat: {x} -> {y}"
+                )  # Changed from info to debug
             p_val_1 = self._run_cont_cat(x, y, Z)
-            # print("Running cat -> cont")
+            if verbose:
+                logging.debug(
+                    f"Running cat -> cont: {y} -> {x}"
+                )  # Changed from info to debug
             p_val_2 = self._run_cat_cont(y, x, Z)
             return self._agg_p_values(p_val_1, p_val_2)
 
         if self.data_types[y] in regression_types:
-            # print("Running cont -> cat")
+            if verbose:
+                logging.debug(
+                    f"Running cont -> cat: {y} -> {x}"
+                )  # Changed from info to debug
             p_val_1 = self._run_cont_cat(y, x, Z)
-            # print("Running cat -> cont")
+            if verbose:
+                logging.debug(
+                    f"Running cat -> cont: {x} -> {y}"
+                )  # Changed from info to debug
             p_val_2 = self._run_cat_cont(x, y, Z)
 
             return self._agg_p_values(p_val_1, p_val_2)
 
-        p_val_1 = self._run_cont_cat(x, y, Z)
-        p_val_2 = self._run_cont_cat(y, x, Z)
+        if verbose:
+            logging.debug(f"Running chi2: {x} -> {y}")  # Changed from info to debug
+        return self.chi2(x, y, Z)
 
-        return self._agg_p_values(p_val_1, p_val_2)
-
-    def __call__(self, x: str, y: str, Z: Optional[list[str]] = []):
-        return bool(self._run(x, y, Z) > self.threshold)
+    def __call__(
+        self, x: str, y: str, Z: Optional[list[str]] = [], verbose: bool = False
+    ):
+        try:
+            return bool(self._run(x, y, Z, verbose) > self.threshold)
+        except Exception as e:
+            logging.error(f"Error running {x} -- {y} | {Z}")
+            logging.error(str(e))
+            return False
