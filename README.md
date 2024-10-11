@@ -70,12 +70,14 @@ Key features:
 import pandas as pd
 from magpy.search.astar import AStarSearch
 from magpy.oracles.mixed import MixedDataOracle
-Load your data
+
 data = pd.read_csv('your_data.csv')
 oracle = MixedDataOracle(data)
 astar = AStarSearch(data)
-astar.run_scoring(func=oracle, parallel=True)# Perform search
-result = astar.search()# Visualize result
+astar.run_scoring(func=oracle, parallel=True)
+result = astar.search()
+
+
 import networkx as nx
 import matplotlib.pyplot as plt
 G = nx.from_pandas_adjacency(result, create_using=nx.DiGraph)
