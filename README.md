@@ -19,12 +19,12 @@ The `AStarSearch` class implements the A\* search algorithm for Bayesian network
 
 ```python
 import pandas as pd
-from magpy.search.astar import AStarSearch
+from magpy.search.astar import AStarSearch, bic_score_node
 
 data: pd.DataFrame = ...
 
 astar = AStarSearch(data)
-astar.run_scoring(func=my_custom_scoring_function, parallel=True)
+astar.run_scoring(func=bic_score_node, parallel=True)
 result = astar.search()
 ```
 
