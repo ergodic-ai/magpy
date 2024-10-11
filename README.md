@@ -18,8 +18,11 @@ The primary focus of MagPy is causal discovery, which involves:
 The `AStarSearch` class implements the A\* search algorithm for Bayesian network structure learning.
 
 ```python
+import pandas as pd
 from magpy.search.astar import AStarSearch
-Initialize with data
+
+data: pd.DataFrame = ...
+
 astar = AStarSearch(data)
 astar.run_scoring(func=my_custom_scoring_function, parallel=True)
 result = astar.search()
@@ -51,7 +54,7 @@ The `MixedDataOracle` class handles conditional independence testing for mixed d
 
 ```python
 from magpy.oracles.mixed import MixedDataOracle
-Initialize oracle
+
 oracle = MixedDataOracle(data, threshold=0.05)
 independent = oracle(x, y, Z)
 ```
