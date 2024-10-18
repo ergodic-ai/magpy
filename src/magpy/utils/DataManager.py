@@ -120,6 +120,15 @@ class DataTypeManager:
             return "numeric"
         return "unknown"
 
+    def is_continuous(self, column: str):
+        return self.data_types[column] == "numeric"
+
+    def is_categorical(self, column: str):
+        return self.data_types[column] in ["categorical", "object", "binary"]
+
+    def is_binary(self, column: str):
+        return self.data_types[column] == "binary"
+
 
 def prep_data(df: pandas.DataFrame, data_types: dict, n_cat_max: int):
     """
