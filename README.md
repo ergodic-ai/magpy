@@ -1,6 +1,6 @@
-# MagPy: Causal Discovery Framework
+# MagPy: Causal Discovery and Effect Estimation Framework
 
-MagPy is a Python framework for causal discovery, aimed at uncovering causal relationships in observational data. It implements various algorithms and techniques for learning the structure of causal graphs from data.
+MagPy is a Python framework for causal discovery and effect estimation, aimed at uncovering causal relationships in observational data and estimate the impact of interventinos/counterfactuals. 
 
 ## Project Scope
 
@@ -48,23 +48,11 @@ Key features:
 - Parallel processing
 - Constraint-based search with super_graph and include_graph
 
-### 2. PC Skeleton Algorithm
 
-The `pc_skeleton` function implements the PC algorithm for learning the skeleton of a causal graph.
+### 2. Oracles
 
-```python
-from magpy.search.pcskeleton import pc_skeleton
-skeleton, sepsets = pc_skeleton(ci_test, nodes)
-```
-
-Key features:
-
-- Customizable conditional independence tests
-- Parallel execution for improved performance
-
-### 3. MixedDataOracle
-
-The `MixedDataOracle` class handles conditional independence testing for mixed data types.
+We are introducing a variety of conditional independence tests - oracles. 
+As an example, the `MixedDataOracle` class handles conditional independence testing for mixed data types.
 
 ```python
 from magpy.oracles.mixed import MixedDataOracle
@@ -73,22 +61,35 @@ oracle = MixedDataOracle(data, threshold=0.05)
 independent = oracle(x, y, Z)
 ```
 
-Key features:
+  
+### 3. PC Skeleton Algorithm
 
-- Handles continuous, categorical, and binary data types
-- Customizable threshold for conditional independence
+The `pc_skeleton` function implements the PC algorithm for learning the skeleton of a causal graph.
+
+```python
+from magpy.search.pcskeleton import pc_skeleton
+from magpy.oracles.mixed import MixedDataOracle
+import pandas
+
+data: pandas.DataFrame = ... 
+
+nodes = list(data.columns)
+oracle = MixedDataOracle(data, threshold=0.05)
+skeleton, sepsets = pc_skeleton(oracle, nodes)
+
+```
 
 ### 3. Quick Start
 
+For continuous data:
+
 ```python
 import pandas as pd
-from magpy.search.astar import AStarSearch
-from magpy.oracles.mixed import MixedDataOracle
+from magpy.search.astar import AStarSearch, bic_score_node
 
 data = pd.read_csv('your_data.csv')
-oracle = MixedDataOracle(data)
 astar = AStarSearch(data)
-astar.run_scoring(func=oracle, parallel=True)
+astar.run_scoring(func=bic_score_node, parallel=True)
 result = astar.search()
 
 
@@ -97,3 +98,5 @@ import matplotlib.pyplot as plt
 G = nx.from_pandas_adjacency(result, create_using=nx.DiGraph)
 nx.draw(G, with_labels=True)plt.show()
 ```
+
+For categorical data, see the `sf.ipynb` notebook.
