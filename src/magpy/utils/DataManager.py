@@ -121,7 +121,9 @@ class DataTypeManager:
         return "unknown"
 
     def is_continuous(self, column: str):
-        return self.data_types[column] == "numeric"
+        return (
+            self.data_types[column] == "numeric" or self.data_types[column] == "integer"
+        )
 
     def is_categorical(self, column: str):
         return self.data_types[column] in ["categorical", "object", "binary"]

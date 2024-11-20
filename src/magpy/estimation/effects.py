@@ -1,6 +1,7 @@
-from typing import Any, Union
+from typing import Any, Literal, Union
 from causalml.inference.meta import BaseTClassifier, BaseXClassifier
 from magpy.estimation.categorical import CategoricalEstimator
+from magpy.estimation.double import DebiasedML
 from magpy.utils.DataManager import DataTypeManager, prep_data
 import pandas
 from pydantic import BaseModel
@@ -41,8 +42,8 @@ class ContinuousTreatmentParams(BaseModel):
     """
 
     column: str
-    base_value: float
-    treatment_value: float
+    # base_value: float
+    # treatment_value: float
 
     def fit_transform(self, data: pandas.DataFrame) -> pandas.Series:
         if self.column not in data.columns:
@@ -155,7 +156,7 @@ class CovariateData(BaseModel):
 
 class ITEResults(BaseModel):
     data: pandas.DataFrame
-    covariate_groups: List[pandas.DataFrame]
+    covariate_groups: dict[str, pandas.DataFrame]
 
     class Config:
         arbitrary_types_allowed = True
@@ -178,10 +179,8 @@ class EffectEstimator:
         self.regressor = regressor
         self.regressor_kwargs = regressor_kwargs
 
-        self.learner_x = BaseXClassifier(
-            self.classifier(**self.classifier_kwargs),
-            self.regressor(**self.regressor_kwargs),
-        )
+        self.learner_x = None
+        self.learner_double = None
 
     def _check_columns(
         self,
@@ -267,7 +266,7 @@ class EffectEstimator:
         outcome: Union[CategoricalOutcomeParams, ContinuousOutcomeParams],
         covariates: List[str] = [],
         n_classes: int = 5,
-    ) -> Tuple[pandas.DataFrame, pandas.Series, pandas.Series, List[int]]:
+    ) -> Tuple[pandas.DataFrame, pandas.Series, pandas.Series, Tuple]:
         self._check_columns(treatment, outcome)
         self._check_treatment_type(treatment)
         self._check_outcome_type(outcome)
@@ -275,13 +274,22 @@ class EffectEstimator:
 
         if isinstance(treatment, ContinuousTreatmentParams):
             self.data[treatment.column] = self.data[treatment.column].astype(float)
+            treatment_type = "continuous"
         elif isinstance(treatment, CategoricalTreatmentParams):
             self.data[treatment.column] = self.data[treatment.column].astype(str)
+            treatment_type = "categorical"
+
+        if isinstance(outcome, ContinuousOutcomeParams):
+            outcome_type = "continuous"
+        elif isinstance(outcome, CategoricalOutcomeParams):
+            outcome_type = "categorical"
 
         treatment_vector: pandas.Series = treatment.fit_transform(self.data)
         outcome_vector: pandas.Series = outcome.fit_transform(self.data)
         X: pandas.DataFrame = self.data.loc[:, covariates]
         categorical = self._get_categorical_covariates(covariates)
+
+        types = (treatment_type, outcome_type)
 
         if X.shape[1] == 0:
             X = pandas.DataFrame(
@@ -291,9 +299,121 @@ class EffectEstimator:
             )
         else:
             X, _, _ = prep_data(X, self.data_manager.data_types, n_classes)
-        categorical = []
+        # categorical = []
 
-        return X, treatment_vector, outcome_vector, categorical
+        return X, treatment_vector, outcome_vector, types
+
+    def get_x_learner(
+        self,
+        outcome_type,
+    ):
+        if outcome_type == "categorical":
+            outcome_learner = self.classifier(**self.classifier_kwargs)
+        else:
+            outcome_learner = self.regressor(**self.regressor_kwargs)
+
+        learner_x = BaseXClassifier(
+            outcome_learner,
+            self.regressor(**self.regressor_kwargs),
+        )
+
+        return learner_x
+
+    def estimate_ate_cat_treatment(
+        self,
+        X: pandas.DataFrame,
+        treatment: pandas.Series,
+        outcome: pandas.Series,
+        outcome_type: str,
+    ):
+        self.learner_x = self.get_x_learner(outcome_type)
+
+        [ate], [lb], [ub] = self.learner_x.estimate_ate(
+            X.values, treatment.values, outcome.values
+        )
+
+        baseline_incidence = outcome.mean()
+
+        assert isinstance(
+            baseline_incidence, float
+        ), "Baseline incidence is not a float, something went wrong"
+
+        if outcome_type == "categorical":
+            assert (
+                0 < baseline_incidence < 1
+            ), "Baseline incidence is not between 0 and 1"
+
+        uplift = ate / (baseline_incidence + 1e-10)
+
+        return ATEResults(
+            ate=ate,
+            lower_bound=lb,
+            upper_bound=ub,
+            baseline_incidence=baseline_incidence,
+            uplift=uplift,
+        )
+
+    def get_double_learner(self, outcome_type):
+        if outcome_type == "categorical":
+            outcome_learner = self.classifier(**self.classifier_kwargs)
+        else:
+            outcome_learner = self.regressor(**self.regressor_kwargs)
+
+        learner_double = DebiasedML(
+            self.regressor(**self.regressor_kwargs),
+            outcome_learner,
+            self.regressor(**self.regressor_kwargs),
+        )
+
+        return learner_double
+
+    def estimate_ate_cont_treatment(
+        self,
+        X: pandas.DataFrame,
+        treatment: pandas.Series,
+        outcome: pandas.Series,
+        outcome_type: str,
+    ):
+
+        self.learner_double = self.get_double_learner(outcome_type)
+
+        X = X.copy()
+        covariates = list(X.columns)
+        X["treatment"] = treatment
+        X["outcome"] = outcome
+
+        self.X = X
+
+        learner = self.learner_double.fit(X, "treatment", "outcome", covariates)
+
+        ite = learner.get_ite(X)
+        ate = ite.mean()
+
+        std = ite.std()
+
+        lb = ite - 2 * std
+        ub = ite + 2 * std
+
+        baseline_incidence = outcome.mean()
+
+        assert isinstance(
+            baseline_incidence, float
+        ), "Baseline incidence is not a float, something went wrong"
+
+        if outcome_type == "categorical":
+            assert (
+                0 < baseline_incidence < 1
+            ), "Baseline incidence is not between 0 and 1"
+
+        uplift = ate / (baseline_incidence + 1e-10)
+
+        return ATEResults(
+            ate=ate,
+            lower_bound=lb,
+            upper_bound=ub,
+            baseline_incidence=baseline_incidence,
+            uplift=uplift,
+        )
 
     def estimate_ate(
         self,
@@ -311,69 +431,59 @@ class EffectEstimator:
             covariantes (List[str]): The covariantes to adjust for.
         """
 
-        X, treatment_series, outcome_series, categorical = self.prepare_data(
-            treatment, outcome, covariates, max_classes
+        X, treatment_series, outcome_series, (treatment_type, outcome_type) = (
+            self.prepare_data(treatment, outcome, covariates, max_classes)
         )
 
-        [ate], [lb], [ub] = self.learner_x.estimate_ate(
-            X.values, treatment_series.values, outcome_series.values
-        )
+        if treatment_type == "categorical":
+            return self.estimate_ate_cat_treatment(
+                X, treatment_series, outcome_series, outcome_type
+            )
+        elif treatment_type == "continuous":
+            return self.estimate_ate_cont_treatment(
+                X, treatment_series, outcome_series, outcome_type
+            )
 
-        baseline_incidence = outcome_series.mean()
-
-        assert isinstance(
-            baseline_incidence, float
-        ), "Baseline incidence is not a float, something went wrong"
-        assert 0 < baseline_incidence < 1, "Baseline incidence is not between 0 and 1"
-
-        uplift = ate / (baseline_incidence + 1e-10)
-
-        return ATEResults(
-            ate=ate,
-            lower_bound=lb,
-            upper_bound=ub,
-            baseline_incidence=baseline_incidence,
-            uplift=uplift,
-        )
+        else:
+            raise TypeError("outcome type is wrong")
 
     def fit_predict(
         self,
         treatment: Union[ContinuousTreatmentParams, CategoricalTreatmentParams],
         outcome: Union[CategoricalOutcomeParams, ContinuousOutcomeParams],
         covariates: List[str] = [],
-        classifier=LogisticRegression,
-        classifier_kwargs={},
         max_classes=5,
     ):
         """This class implements the individual treatment effect estimation using the causalml library.
         The output contains the original data with the estimated individual treatment effects.
         """
 
-        X, treatment_series, outcome_series, categorical = self.prepare_data(
-            treatment, outcome, covariates, max_classes
+        print(treatment, outcome)
+
+        X, treatment_series, outcome_series, (treatment_type, outcome_type) = (
+            self.prepare_data(treatment, outcome, covariates, max_classes)
         )
 
-        # learner = CategoricalEstimator(
-        #     categorical_features=categorical,
-        #     max_classes=max_classes,
-        #     learner=learner,
-        #     **learner_kwargs,
-        # ).fit_pipeline(X.values)
-        # learner_t = BaseTClassifier(learner)
-        # ite = learner_t.fit_predict(
-        #     X.values, treatment_series.values, outcome_series.values
-        # )
+        if treatment_type == "categorical":
+            self.learner_x = self.get_x_learner(outcome_type)
+            ite = self.learner_x.fit_predict(
+                X.values, treatment_series.values, outcome_series.values
+            )
+        elif treatment_type == "continuous":
+            self.learner_double = self.get_double_learner(outcome_type)
+            ite = self.learner_double.fit_predict(
+                X, treatment_series, outcome_series, outcome_type
+            )
 
-        ite = self.learner_x.fit_predict(
-            X.values, treatment_series.values, outcome_series.values
-        )
+        else:
+            raise TypeError("outcome type is wrong")
 
         output_data = self.data.copy()
         output_data["effect"] = ite
         output_data["treatment"] = treatment_series
         output_data["outcome"] = outcome_series
 
-        hte_results = []
+        hte_results = {}
         for covariate in covariates:
             isCategorical = self.data_manager.is_categorical(covariate)
 
@@ -396,8 +506,8 @@ class EffectEstimator:
 
             r = pandas.DataFrame(
                 {
-                    "mean_effect": mean_effect,
-                    "std_effect": std_effect,
+                    "mean_treatment_effect": mean_effect,
+                    "std_treatment_effect": std_effect,
                     "baseline_incidence_ratio": baseline_incidence_ratio,
                     "baseline_incidence_number": baseline_incidence_number,
                     "baseline_untreated_ratio": baseline_untreated_ratio,
@@ -409,8 +519,8 @@ class EffectEstimator:
                 lambda row: (
                     1
                     - pvalue_from_t_test(
-                        row["mean_effect"],
-                        row["std_effect"],
+                        row["mean_treatment_effect"],
+                        row["std_treatment_effect"],
                         min(
                             row["baseline_incidence_number"],
                             row["baseline_untreated_number"],
@@ -421,7 +531,8 @@ class EffectEstimator:
                 * 100,
                 axis=1,
             )
-            hte_results.append(r)
+
+            hte_results[covariate] = r
             if "quantile" in output_data.columns:
                 output_data = output_data.drop(columns=["quantile"])
 

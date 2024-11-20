@@ -1,6 +1,6 @@
 import pandas
 import numpy
-from typing import Optional
+from typing import List, Optional
 import networkx
 import numpy
 import itertools as it
@@ -9,6 +9,7 @@ from joblib import Parallel, delayed
 from pydantic import BaseModel
 import heapq
 from tqdm.auto import tqdm
+from sklearn.preprocessing import PolynomialFeatures
 
 INF = float("inf")
 NEGINF = float("-inf")
@@ -312,6 +313,51 @@ def bic_score_node(
     return bic.item()
 
 
+def bic_score_node_poly(
+    y,
+    X=None,
+    node: str | None = None,
+    parent_set: set | None = None,
+    degree=3,
+    include_bias=True,
+):
+    n = len(y)
+
+    if X is None:
+        residual = numpy.sum(y**2)
+        dof = 0
+
+    else:
+        Xf = PolynomialFeatures(degree=degree, include_bias=include_bias).fit_transform(
+            X
+        )
+        n, dof = Xf.shape
+        _, residual, _, _ = numpy.linalg.lstsq(a=Xf, b=y, rcond=None)
+
+    bic = n * numpy.log(residual / n) + dof * numpy.log(n)
+    return bic.item()
+
+
+def safe_run(func):
+
+    def func_safe(y, X, node, parent_set):
+        try:
+            return func(y, X, node, parent_set)
+        except Exception as e:
+            logging.info(f"Error scoring node {node} with parent set {parent_set}: {e}")
+            try:
+                return func(
+                    y, X + numpy.random.normal(0, 1e-3, X.shape), node, parent_set
+                )
+            except Exception as e:
+                logging.info(
+                    f"Error scoring node {node} with parent set {parent_set}: {e}"
+                )
+                return INF
+
+    return func_safe
+
+
 def validate_include_graph(include_graph: pandas.DataFrame, nodes: list):
     assert include_graph.shape == (
         len(nodes),
@@ -328,6 +374,22 @@ def validate_include_graph(include_graph: pandas.DataFrame, nodes: list):
     assert networkx.is_directed_acyclic_graph(
         nxgraph
     ), "include_graph must be a directed acyclic graph"
+
+
+def validate_tiers(tiers: List[List[str]], nodes: list):
+    # condition 1: variables must be only present once
+    all_variables = [item for sublist in tiers for item in sublist]
+    assert len(all_variables) == len(
+        set(all_variables)
+    ), "Variables must be only present once"
+
+    # condition 2: all variables must be in the nodes list
+    assert all(
+        node in nodes for node in all_variables
+    ), "All variables must be in the nodes list"
+
+    # condition 3: tiers must be non-empty
+    assert all(len(tier) > 0 for tier in tiers), "Tiers must be non-empty"
 
 
 def validate_super_graph(super_graph: pandas.DataFrame, nodes: list):
@@ -363,6 +425,7 @@ class AStarSearch:
         X: pandas.DataFrame,
         super_graph: Optional[pandas.DataFrame] = None,
         include_graph: Optional[pandas.DataFrame] = None,
+        tiers: Optional[List[List[str]]] = None,
         max_parents: Optional[int] = None,
         path_extension: Optional[bool] = True,
     ):
@@ -395,6 +458,13 @@ class AStarSearch:
 
         else:
             validate_super_graph(super_graph, self.nodes)
+
+        if tiers is None:
+            tiers = [self.nodes]
+
+        else:
+            validate_tiers(tiers, self.nodes)
+        self.tiers = tiers
 
         self.super_graph = super_graph
         logging.info(f"Super Graph: {super_graph}")
