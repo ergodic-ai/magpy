@@ -118,7 +118,12 @@ def pc_skeleton(
 
         removed_edges = []
 
-        for node_i, node_j in tqdm(c):
+        if verbose:
+            iterator = tqdm(c, desc="Processing", leave=True)
+        else:
+            iterator = c
+
+        for node_i, node_j in iterator:
             # if verbose:
             #     logging.info(
             #         f"Testing edge {node_i} -- {node_j} (cond_set_size: {cond_set_size})"

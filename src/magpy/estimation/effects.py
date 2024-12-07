@@ -491,42 +491,72 @@ class EffectEstimator:
             if isCategorical:
                 grouper = output_data.groupby(covariate)
             else:
-                output_data["quantile"] = pandas.qcut(output_data[covariate], 5)
+                n = 5
+                good = False
+                while n > 2:
+                    try:
+                        output_data["quantile"] = pandas.qcut(output_data[covariate], n)
+                        grouper = output_data.groupby("quantile")
+                        good = True
+                        break
+                    except:
+                        n = n - 1
+
+                if not good:
+                    output_data["quantile"] = pandas.qcut(
+                        output_data[covariate], n, duplicates="drop"
+                    )
+                    grouper = output_data.groupby("quantile")
+
+                # output_data["quantile"] = pandas.qcut(
+                #     output_data[covariate].rank(method="first"), 5
+                # )
                 grouper = output_data.groupby("quantile")
 
             mean_effect = grouper["effect"].mean()
             std_effect = grouper["effect"].std()
-            baseline_incidence_ratio = grouper["outcome"].mean()
+
+            baseline_incidence_mean = grouper["outcome"].mean()
             baseline_incidence_number = grouper["outcome"].sum()
 
-            baseline_untreated_ratio = 1 - grouper["treatment"].mean()
-            baseline_untreated_number = (
-                grouper["treatment"].count() - grouper["treatment"].sum()
-            )
+            baseline_treated_mean = grouper["treatment"].mean()
+            baseline_treated_number = grouper["treatment"].sum()
 
             r = pandas.DataFrame(
                 {
                     "mean_treatment_effect": mean_effect,
                     "std_treatment_effect": std_effect,
-                    "baseline_incidence_ratio": baseline_incidence_ratio,
+                    "baseline_incidence_mean": baseline_incidence_mean,
                     "baseline_incidence_number": baseline_incidence_number,
-                    "baseline_untreated_ratio": baseline_untreated_ratio,
-                    "baseline_untreated_number": baseline_untreated_number,
+                    "baseline_treated_mean": baseline_treated_mean,
+                    "baseline_treated_number": baseline_treated_number,
+                    "number_of_samples": grouper["outcome"].count(),
                 }
             )
 
-            r["significance"] = r.apply(
-                lambda row: (
-                    1
-                    - pvalue_from_t_test(
-                        row["mean_treatment_effect"],
-                        row["std_treatment_effect"],
-                        min(
-                            row["baseline_incidence_number"],
-                            row["baseline_untreated_number"],
-                        )
-                        - 1,
+            def degrees_of_freedom(row):
+                dof = row["number_of_samples"]
+
+                if outcome_type == "categorical":
+                    dof = min(
+                        row["baseline_incidence_number"],
+                        row["number_of_samples"] - row["baseline_incidence_number"],
+                        dof,
                     )
+                if treatment_type == "categorical":
+                    dof = min(
+                        row["baseline_incidence_number"],
+                        row["number_of_samples"] - row["baseline_incidence_number"],
+                        dof,
+                    )
+
+                return dof
+
+            r["significance"] = r.apply(
+                lambda row: pvalue_from_t_test(
+                    row["mean_treatment_effect"],
+                    row["std_treatment_effect"],
+                    degrees_of_freedom(row),
                 )
                 * 100,
                 axis=1,
@@ -550,4 +580,4 @@ def pvalue_from_t_test(mean_effect, std_effect, number_of_samples):
     if std_effect is None or numpy.isnan(std_effect):
         return 1
 
-    return 2 * (1 - t.cdf(numpy.abs(mean_effect / std_effect), df=number_of_samples))
+    return t.cdf(numpy.abs(mean_effect / std_effect), df=number_of_samples)

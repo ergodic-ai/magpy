@@ -96,18 +96,18 @@ class DebiasedML:
         self.outcome_mean_ = df[outcome].mean()
 
         # Create and fit the debiasing model for treatment
-        self.debias_model_ = clone(self.treatment_learner)
+        # self.debias_model_ = clone(self.treatment_learner)
         treatment_pred = cross_val_predict(
-            self.debias_model_, df[covariates], df[treatment], cv=self.cv_splits
+            self.treatment_learner, df[covariates], df[treatment], cv=self.cv_splits
         )
-        self.debias_model_.fit(df[covariates], df[treatment])
+        self.treatment_learner.fit(df[covariates], df[treatment])
 
         # Modify the outcome prediction part based on outcome type
-        self.denoise_model_ = clone(self.outcome_learner)
+        # self.denoise_model_ = clone(self.outcome_learner)
         if self.outcome_type in ["binary", "multiclass"]:
             # Get probability predictions instead of class predictions
             outcome_pred = cross_val_predict(
-                self.denoise_model_,
+                self.outcome_learner,
                 df[covariates],
                 df[outcome],
                 cv=self.cv_splits,
@@ -121,11 +121,11 @@ class DebiasedML:
 
         else:  # continuous case
             outcome_pred = cross_val_predict(
-                self.denoise_model_, df[covariates], df[outcome], cv=self.cv_splits
+                self.outcome_learner, df[covariates], df[outcome], cv=self.cv_splits
             )
             outcome_res = df[outcome] - outcome_pred
 
-        self.denoise_model_.fit(df[covariates], df[outcome])
+        self.outcome_learner.fit(df[covariates], df[outcome])
 
         # Calculate residuals
         treatment_res = df[treatment] - treatment_pred
@@ -137,8 +137,8 @@ class DebiasedML:
         tikhonov_adj = (1 - numpy.abs(signs)) * self.epsilon + signs * self.epsilon
         transformed_target = outcome_res / (treatment_res + tikhonov_adj)
 
-        self.final_model_ = clone(self.final_learner)
-        self.final_model_.fit(
+        # self.final_model_ = clone(self.final_learner)
+        self.final_learner.fit(
             df[self.covariates_],
             transformed_target,
             sample_weight=weights,
@@ -163,7 +163,7 @@ class DebiasedML:
         if not hasattr(self, "final_model_"):
             raise ValueError("Model must be fitted before getting ITE")
 
-        return self.final_model_.predict(df[self.covariates_])
+        return self.final_learner.predict(df[self.covariates_])
 
     def counterfactual_prediction(
         self, df: pandas.DataFrame, treatment_value: Union[float, numpy.ndarray]
@@ -190,11 +190,11 @@ class DebiasedML:
 
         # Get baseline prediction
         if self.outcome_type == "binary":
-            baseline = self.denoise_model_.predict_proba(df[self.covariates_])
+            baseline = self.outcome_learner.predict_proba(df[self.covariates_])
             baseline = baseline[:, 1]
 
         elif self.outcome_type == "continuous":
-            baseline = self.denoise_model_.predict(df[self.covariates_])
+            baseline = self.outcome_learner.predict(df[self.covariates_])
 
         else:
             raise TypeError("outcome type is wrong")

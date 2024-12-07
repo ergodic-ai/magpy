@@ -1,16 +1,55 @@
 import pandas
 import numpy
-from typing import Callable, Literal, Optional
-from scipy.stats import f, pearsonr
+from typing import Callable, Literal, Optional, Union
+from scipy.stats import f
 from causallearn.utils.cit import CIT
-from scipy.stats import kendalltau
+from sklearn.preprocessing import PolynomialFeatures
 
 
-def linear(X, y, node: Optional[str] = None, parent_set: Optional[set] = None):
+def linear(
+    X: Union[pandas.DataFrame, None],
+    y: pandas.Series,
+    node: Optional[str] = None,
+    parent_set: Optional[set] = None,
+):
     """Return the residual sum of squares for the data X and y."""
-    _, [rss], _, _ = numpy.linalg.lstsq(X, y, rcond=None)
 
-    p = X.shape[1]
+    if X is None:
+        X_values = numpy.ones(shape=(y.shape[0], 1))
+
+    else:
+        X_values = X.values
+        X_values = numpy.hstack([numpy.ones(shape=(X.shape[0], 1)), X_values])
+
+    y_values: numpy.ndarray = y.values  # type: ignore
+
+    _, [rss], _, _ = numpy.linalg.lstsq(X_values, y_values, rcond=None)
+
+    p = X_values.shape[1]
+
+    return rss, p
+
+
+def cubic(
+    X: Union[pandas.DataFrame, None],
+    y: pandas.Series,
+    node: Optional[str] = None,
+    parent_set: Optional[set] = None,
+):
+    """Return the residual sum of squares for the data X and y."""
+
+    if X is None:
+        X_values = numpy.ones(shape=(y.shape[0], 1))
+
+    else:
+        X_values = X.values
+        X_values = PolynomialFeatures(degree=3).fit_transform(X_values)
+
+    y_values: numpy.ndarray = y.values  # type: ignore
+
+    _, [rss], _, _ = numpy.linalg.lstsq(X_values, y_values, rcond=None)
+
+    p = X_values.shape[1]
 
     return rss, p
 
@@ -21,7 +60,7 @@ def get_f_and_p_val(
     F_stat = ((rss_reduced - rss_full) / (p_full - p_reduced)) / (
         rss_full / (n - p_full)
     )
-    p_value = 1 - f.cdf(F_stat, p_full - p_reduced, n - p_full)
+    p_value: float = 1 - f.cdf(F_stat, p_full - p_reduced, n - p_full)  # type: ignore
 
     return F_stat, p_value
 
@@ -66,7 +105,6 @@ class BaseOracle:
 
         else:
             X = self.data[Z_features + x_features].copy()
-            X.loc[:, "intercept"] = 1
             RSS_full, p_full = self.learner(X, y, y_feat, set(Z_features + x_features))
             self.RSSCache[thisHash] = RSS_full, p_full
 
@@ -76,10 +114,9 @@ class BaseOracle:
             RSS_reduced, p_reduced = self.RSSCache[thisHash]
         else:
             if len(Z_features) == 0:
-                X_reduced = numpy.ones(shape=(n, 1))
+                X_reduced = None
             else:
                 X_reduced = self.data[Z_features].copy()
-                X_reduced.loc[:, "intercept"] = 1
 
             RSS_reduced, p_reduced = self.learner(X_reduced, y, y_feat, set(Z_features))
 
@@ -135,10 +172,10 @@ class CausalLearnOracle:
         x = self.nodes_to_idx_mapping[x]
         y = self.nodes_to_idx_mapping[y]
         Z = set([self.nodes_to_idx_mapping[z] for z in Z])
-        return self.oracle(x, y, Z) > self.threshold
+        return self.oracle(x, y, Z) > self.threshold  # type: ignore
 
     def _run(self, x, y, Z=[]):
         x = self.nodes_to_idx_mapping[x]
         y = self.nodes_to_idx_mapping[y]
         Z = set([self.nodes_to_idx_mapping[z] for z in Z])
-        return self.oracle(x, y, Z)
+        return self.oracle(x, y, Z)  # type: ignore
