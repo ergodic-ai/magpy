@@ -671,7 +671,7 @@ class AStarSearch:
 
         return args
 
-    def _score(self, args, parallel=True, n_jobs=4, func=None, verbose=False):
+    def _score(self, args, parallel=False, n_jobs=4, func=None, verbose=False):
         """
         Scores the nodes
 
@@ -718,7 +718,7 @@ class AStarSearch:
     def _process_scoring_results(self, results: list[dict]):
         self.parent_graph = ParentGraph(self.nodes, results)
 
-    def run_scoring(self, parallel=True, func=None, n_jobs=8, verbose=False):
+    def run_scoring(self, parallel=False, func=None, n_jobs=8, verbose=False):
         logging.info("Scoring Nodes")
         args = self._full_score_args()
         results = self._score(
