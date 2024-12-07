@@ -4,7 +4,7 @@ with open("requirements.txt") as f:
     required = f.read().splitlines()
 
 setup(
-    name="magpy",
+    name="causal-magpy",
     version="0.1.0",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
