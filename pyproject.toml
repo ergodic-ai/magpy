@@ -3,8 +3,8 @@ requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "causal-magpy"
-version = "0.1.0"
+name = "causal_magpy"
+version = "0.1.1"
 description = "A package for causal discovery and causal inference algorithms"
 authors = [{name = "Andre", email = "andre@ergodic.ai"}]
 readme = "README.md"
